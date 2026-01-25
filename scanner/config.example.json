@@ -1,0 +1,36 @@
+{
+  "api_url": "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1",
+  "api_key": "YOUR_API_KEY_HERE",
+  "snmp_community": "public",
+  "snmp_version": 2,
+  "scan_interval": 30,
+  "timeout": 2,
+  "subnets": [
+    "192.168.1.0/24",
+    "192.168.10.0/24"
+  ],
+  "gaming_devices": {
+    "switch_cluster": [
+      "192.168.1.50",
+      "192.168.1.51",
+      "192.168.1.52"
+    ],
+    "ps5_cluster": [
+      "192.168.1.60",
+      "192.168.1.61"
+    ]
+  },
+  "device_names": {
+    "192.168.1.1": "Main Gateway",
+    "192.168.1.2": "Core Switch",
+    "192.168.1.3": "Gaming AP"
+  },
+  "alert_thresholds": {
+    "bandwidth_warning_gbps": 8.0,
+    "bandwidth_critical_gbps": 9.5,
+    "latency_warning_ms": 20,
+    "latency_critical_ms": 50,
+    "packet_loss_warning_percent": 1,
+    "packet_loss_critical_percent": 5
+  }
+}
