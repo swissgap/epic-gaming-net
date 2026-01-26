@@ -18,6 +18,26 @@ interface ScannerStatus {
   errorCount: number;
 }
 
+interface ApiInfraDevice {
+  id: string;
+  ip?: string;
+  name?: string;
+  type?: string;
+  vendor?: string;
+  status?: string;
+  ping?: number;
+  ports?: number;
+  cpu?: number;
+  memory?: number;
+}
+
+interface ApiGamingDevice {
+  ip: string;
+  name?: string;
+  status?: string;
+  ping?: number;
+}
+
 const DEFAULT_CONFIG: ScannerConfig = {
   apiUrl: "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1",
   apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY2twbGVtd3p6emppa3Z3eGtiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTA1MjMsImV4cCI6MjA4NDg2NjUyM30.aYhxGKgUbfQJV3TghF3JMq0tQ8EUf6N3XsFTQWyAwcg",
@@ -220,7 +240,7 @@ export function useScannerManagement() {
 
       // Parse infrastructure devices
       if (infraData?.data?.devices) {
-        infraData.data.devices.forEach((device: any) => {
+        infraData.data.devices.forEach((device: ApiInfraDevice) => {
           apiHosts.push({
             ip: device.ip || device.id,
             name: device.name || device.id,
@@ -238,7 +258,7 @@ export function useScannerManagement() {
 
       // Parse gaming devices
       if (gamingData?.data?.devices) {
-        gamingData.data.devices.forEach((device: any) => {
+        gamingData.data.devices.forEach((device: ApiGamingDevice) => {
           if (!apiHosts.find(h => h.ip === device.ip)) {
             apiHosts.push({
               ip: device.ip,
@@ -324,7 +344,7 @@ export function useScannerManagement() {
   // Initial load
   useEffect(() => {
     fetchHostsFromApi();
-  }, []);
+  }, [fetchHostsFromApi]);
 
   return {
     config,

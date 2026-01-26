@@ -39,6 +39,19 @@ interface WifiStat {
   fill: string;
 }
 
+interface ApiBandwidthItem {
+  timestamp: string;
+  upstream_gbps: number;
+  downstream_gbps: number;
+  wifi_gbps: number;
+}
+
+interface ApiGamingDevice {
+  name?: string;
+  ping: number;
+  packetLoss: number;
+}
+
 // Generate mock data for demo mode
 const generateMockBandwidth = (): BandwidthData[] => {
   const now = new Date();
@@ -109,7 +122,7 @@ export function useNetworkData() {
       if (bandwidthRes.ok) {
         const bandwidthData = await bandwidthRes.json();
         if (bandwidthData.data && bandwidthData.data.length > 0) {
-          const formattedBandwidth = bandwidthData.data.map((item: any) => ({
+          const formattedBandwidth = bandwidthData.data.map((item: ApiBandwidthItem) => ({
             time: new Date(item.timestamp).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }),
             upstream: item.upstream_gbps,
             downstream: item.downstream_gbps,
@@ -144,14 +157,14 @@ export function useNetworkData() {
         const gamingData = await gamingRes.json();
         if (gamingData.data?.devices && gamingData.data.devices.length > 0) {
           // Transform into clusters
-          const nintendo = gamingData.data.devices.filter((d: any) => d.name?.includes("Nintendo"));
-          const ps5 = gamingData.data.devices.filter((d: any) => d.name?.includes("PlayStation"));
+          const nintendo = gamingData.data.devices.filter((d: ApiGamingDevice) => d.name?.includes("Nintendo"));
+          const ps5 = gamingData.data.devices.filter((d: ApiGamingDevice) => d.name?.includes("PlayStation"));
           
           if (nintendo.length > 0 || ps5.length > 0) {
             const clusters: DeviceCluster[] = [];
             if (nintendo.length > 0) {
-              const avgPing = nintendo.reduce((sum: number, d: any) => sum + d.ping, 0) / nintendo.length;
-              const avgPL = nintendo.reduce((sum: number, d: any) => sum + d.packetLoss, 0) / nintendo.length;
+              const avgPing = nintendo.reduce((sum: number, d: ApiGamingDevice) => sum + d.ping, 0) / nintendo.length;
+              const avgPL = nintendo.reduce((sum: number, d: ApiGamingDevice) => sum + d.packetLoss, 0) / nintendo.length;
               clusters.push({
                 name: "Nintendo Switch 2 Cluster",
                 count: nintendo.length,
@@ -161,8 +174,8 @@ export function useNetworkData() {
               });
             }
             if (ps5.length > 0) {
-              const avgPing = ps5.reduce((sum: number, d: any) => sum + d.ping, 0) / ps5.length;
-              const avgPL = ps5.reduce((sum: number, d: any) => sum + d.packetLoss, 0) / ps5.length;
+              const avgPing = ps5.reduce((sum: number, d: ApiGamingDevice) => sum + d.ping, 0) / ps5.length;
+              const avgPL = ps5.reduce((sum: number, d: ApiGamingDevice) => sum + d.packetLoss, 0) / ps5.length;
               clusters.push({
                 name: "PlayStation 5 Cluster",
                 count: ps5.length,

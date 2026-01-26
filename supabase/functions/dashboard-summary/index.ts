@@ -3,6 +3,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+interface InfraDevice {
+  status: string;
+  cpu: number;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -46,8 +51,8 @@ Deno.serve(async (req: Request) => {
       },
       infrastructure: {
         total_devices: infrastructure.data?.total_devices || infrastructure.data?.devices?.length || 0,
-        active_devices: infrastructure.data?.devices?.filter((d: any) => d.status === "active").length || 0,
-        critical_devices: infrastructure.data?.devices?.filter((d: any) => d.cpu > 80).length || 0,
+        active_devices: infrastructure.data?.devices?.filter((d: InfraDevice) => d.status === "active").length || 0,
+        critical_devices: infrastructure.data?.devices?.filter((d: InfraDevice) => d.cpu > 80).length || 0,
       },
       gaming: {
         total: gaming.summary?.total || gaming.data?.total_gaming_devices || 0,
