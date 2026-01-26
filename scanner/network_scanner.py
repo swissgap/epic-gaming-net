@@ -475,122 +475,236 @@ class NetworkScanner:
         return {"avg": 0, "min": 0, "max": 0, "loss": 100}
     
     def aggregate_bandwidth_data(self) -> Dict:
-        """Aggregiert Bandwidth-Daten für das Dashboard"""
+        """Aggregiert Bandwidth-Daten für das Dashboard (API-kompatibles Format)"""
         total_downstream = 0
         total_upstream = 0
-        
+        total_wifi = 0
+
         for ip, device in self.devices.items():
             if "bandwidth" in device.get("metrics", {}):
                 bw = device["metrics"]["bandwidth"]
                 total_downstream += bw.get("in_bps", 0)
                 total_upstream += bw.get("out_bps", 0)
-        
+                # WiFi traffic from access points
+                if device.get("type") == "access_point":
+                    total_wifi += bw.get("in_bps", 0) + bw.get("out_bps", 0)
+
+        # Format matching Edge Function expectations
+        downstream_gbps = total_downstream / 1_000_000_000
+        upstream_gbps = total_upstream / 1_000_000_000
+        wifi_gbps = total_wifi / 1_000_000_000 if total_wifi > 0 else downstream_gbps * 0.4
+
         return {
-            "downstream": {
-                "current": total_downstream / 1_000_000_000,  # Gbps
-                "max": 10.0,  # 10 Gbps Max
-                "unit": "Gbps"
-            },
-            "upstream": {
-                "current": total_upstream / 1_000_000_000,
-                "max": 10.0,
-                "unit": "Gbps"
-            },
+            "upstream_gbps": round(upstream_gbps, 2),
+            "downstream_gbps": round(downstream_gbps, 2),
+            "wifi_gbps": round(wifi_gbps, 2),
+            "upstream_percent": round((upstream_gbps / 10.0) * 100, 1),
             "timestamp": datetime.now().isoformat()
         }
     
     def build_infrastructure_data(self) -> Dict:
-        """Baut Infrastruktur-Daten für das Dashboard"""
-        gateway = None
-        switches = []
-        access_points = []
-        
+        """Baut Infrastruktur-Daten für das Dashboard (API-kompatibles Format)"""
+        devices = []
+
         for ip, device in self.devices.items():
             dev_type = device.get("type", "unknown")
-            
+            metrics = device.get("metrics", {})
+
+            # Map internal type to API type
+            api_type = "Access Point" if dev_type == "access_point" else \
+                       "Gateway" if dev_type in ["router", "firewall"] or ip.endswith(".1") else \
+                       "Switch" if dev_type == "switch" else "Switch"
+
             device_summary = {
+                "id": device.get("name", ip),
                 "ip": ip,
-                "name": device.get("name", ip),
-                "status": device.get("status", "unknown"),
-                "model": device.get("model", ""),
+                "type": api_type,
+                "status": "active" if device.get("status") == "online" else \
+                          "warning" if device.get("status") == "warning" else "inactive",
+                "cpu": int(metrics.get("cpuUsage", metrics.get("cpuLoad", 0)) or 0),
+                "memory": int(metrics.get("memoryUsed", 0) or 0),
+                "ports": len([i for i in device.get("interfaces", []) if i.get("status") == "up"]),
+                "vendor": device.get("vendor", "Unknown"),
                 "uptime": device.get("uptime", ""),
-                "port_count": len([i for i in device.get("interfaces", []) if i.get("status") == "up"])
+                "ping": self.measure_latency(ip, 1).get("avg", 0)
             }
-            
-            if dev_type in ["router", "firewall"] or ip.endswith(".1"):
-                gateway = device_summary
-            elif dev_type == "switch":
-                switches.append(device_summary)
-            elif dev_type == "access_point":
-                access_points.append(device_summary)
-        
-        # Default Gateway wenn keiner gefunden
-        if not gateway:
-            gateway = {
-                "ip": self.get_local_network().replace(".0/24", ".1"),
-                "name": "Gateway",
-                "status": "unknown",
-                "model": "Unknown Router"
-            }
-        
+            devices.append(device_summary)
+
+        # Add default gateway if not found
+        if not any(d["type"] == "Gateway" for d in devices):
+            gateway_ip = self.get_local_network().replace(".0/24", ".1")
+            latency = self.measure_latency(gateway_ip, 1)
+            devices.insert(0, {
+                "id": "Gateway",
+                "ip": gateway_ip,
+                "type": "Gateway",
+                "status": "active" if latency["loss"] < 100 else "inactive",
+                "cpu": 0,
+                "memory": 0,
+                "ports": 1,
+                "vendor": "Unknown",
+                "ping": latency.get("avg", 0)
+            })
+
         return {
-            "gateway": gateway,
-            "switches": switches,
-            "access_points": access_points,
-            "total_devices": len(self.devices)
+            "devices": devices,
+            "total_devices": len(devices)
         }
     
     def build_gaming_devices_data(self) -> Dict:
-        """Baut Gaming-Device-Daten (Latenz-Messungen)"""
-        gaming_devices = {
-            "switch_cluster": [],
-            "ps5_cluster": []
-        }
-        
-        # Identifiziere Gaming-Devices (könnte durch Config erweitert werden)
+        """Baut Gaming-Device-Daten (Latenz-Messungen) - API-kompatibles Format"""
+        devices = []
+
+        # Identifiziere Gaming-Devices aus Config
         gaming_ips = self.config.get("gaming_devices", {})
-        
-        for device_type, ips in gaming_ips.items():
-            for ip in ips:
-                latency = self.measure_latency(ip)
-                gaming_devices[device_type].append({
-                    "ip": ip,
-                    "name": self.devices.get(ip, {}).get("name", ip),
-                    "ping": latency["avg"],
-                    "packet_loss": latency["loss"],
-                    "status": "optimal" if latency["avg"] < 20 else "warning" if latency["avg"] < 50 else "critical"
-                })
-        
-        return gaming_devices
+
+        # Nintendo Switch Cluster
+        switch_ips = gaming_ips.get("switch_cluster", [])
+        for ip in switch_ips:
+            latency = self.measure_latency(ip)
+            status = "optimal" if latency["avg"] < 20 and latency["loss"] < 1 else \
+                     "warning" if latency["avg"] < 50 else "critical"
+            devices.append({
+                "name": f"Nintendo Switch ({ip})",
+                "ip": ip,
+                "count": 1,
+                "ping": round(latency["avg"], 1),
+                "packetLoss": round(latency["loss"], 2),
+                "status": status,
+                "type": "nintendo"
+            })
+
+        # PlayStation 5 Cluster
+        ps5_ips = gaming_ips.get("ps5_cluster", [])
+        for ip in ps5_ips:
+            latency = self.measure_latency(ip)
+            status = "optimal" if latency["avg"] < 20 and latency["loss"] < 1 else \
+                     "warning" if latency["avg"] < 50 else "critical"
+            devices.append({
+                "name": f"PlayStation 5 ({ip})",
+                "ip": ip,
+                "count": 1,
+                "ping": round(latency["avg"], 1),
+                "packetLoss": round(latency["loss"], 2),
+                "status": status,
+                "type": "playstation"
+            })
+
+        # Also scan for devices in self.devices that might be gaming devices
+        for ip, device in self.devices.items():
+            name_lower = device.get("name", "").lower()
+            if any(kw in name_lower for kw in ["nintendo", "switch", "playstation", "ps5", "xbox"]):
+                if not any(d["ip"] == ip for d in devices):
+                    latency = self.measure_latency(ip, 1)
+                    status = "optimal" if latency["avg"] < 20 else \
+                             "warning" if latency["avg"] < 50 else "critical"
+                    device_type = "nintendo" if "nintendo" in name_lower or "switch" in name_lower else \
+                                  "playstation" if "playstation" in name_lower or "ps5" in name_lower else "other"
+                    devices.append({
+                        "name": device.get("name", ip),
+                        "ip": ip,
+                        "count": 1,
+                        "ping": round(latency["avg"], 1),
+                        "packetLoss": round(latency["loss"], 2),
+                        "status": status,
+                        "type": device_type
+                    })
+
+        return {
+            "devices": devices,
+            "total_gaming_devices": len(devices)
+        }
     
     def build_alerts_data(self) -> List[Dict]:
-        """Generiert Alerts basierend auf Gerätestatus"""
+        """Generiert Alerts basierend auf Gerätestatus (API-kompatibles Format)"""
         alerts = []
-        
+
         for ip, device in self.devices.items():
             # High Bandwidth Alert
             bw = device.get("metrics", {}).get("bandwidth", {})
             if bw.get("in_mbps", 0) > 8000:  # > 8 Gbps
                 alerts.append({
-                    "id": f"bw-{ip}",
+                    "device": device.get("name", ip),
                     "level": "warning",
-                    "message": f"Hohe Bandbreite auf {device.get('name', ip)}: {bw['in_mbps']:.1f} Mbps",
-                    "source": ip,
-                    "timestamp": datetime.now().isoformat()
+                    "msg": f"Hohe Bandbreite: {bw['in_mbps']:.1f} Mbps",
+                    "time": "Jetzt"
                 })
-            
+
             # Interface Down Alert
             down_interfaces = [i for i in device.get("interfaces", []) if i.get("status") == "down"]
             if down_interfaces and device.get("type") in ["switch", "router"]:
                 alerts.append({
-                    "id": f"if-down-{ip}",
+                    "device": device.get("name", ip),
                     "level": "info",
-                    "message": f"{len(down_interfaces)} Interface(s) down auf {device.get('name', ip)}",
-                    "source": ip,
-                    "timestamp": datetime.now().isoformat()
+                    "msg": f"{len(down_interfaces)} Interface(s) down",
+                    "time": "Jetzt"
                 })
-        
+
+            # High CPU Alert
+            cpu = device.get("metrics", {}).get("cpuUsage", 0)
+            if cpu and int(cpu) > 80:
+                alerts.append({
+                    "device": device.get("name", ip),
+                    "level": "warning",
+                    "msg": f"Hohe CPU-Auslastung: {cpu}%",
+                    "time": "Jetzt"
+                })
+
         return alerts
+
+    def build_hosts_data(self) -> Dict:
+        """Baut Host-Daten für das Scanner Management"""
+        hosts = []
+
+        for ip, device in self.devices.items():
+            latency = self.measure_latency(ip, 1)
+
+            # Map device type to API format
+            host_type = device.get("type", "unknown")
+            if host_type == "access_point":
+                host_type = "access_point"
+            elif host_type in ["router", "firewall"]:
+                host_type = "router"
+            elif host_type == "switch":
+                host_type = "switch"
+            elif host_type == "storage":
+                host_type = "storage"
+            elif host_type == "server":
+                host_type = "server"
+            else:
+                host_type = "unknown"
+
+            status = "online"
+            if latency["loss"] >= 100:
+                status = "offline"
+            elif latency["avg"] > 50 or latency["loss"] > 1:
+                status = "warning"
+
+            host = {
+                "ip": ip,
+                "name": device.get("name", ip),
+                "type": host_type,
+                "vendor": device.get("vendor", "Unknown"),
+                "status": status,
+                "lastSeen": device.get("last_seen", datetime.now().isoformat()),
+                "ping": round(latency["avg"], 1) if latency["avg"] > 0 else None,
+                "interfaces": len(device.get("interfaces", [])),
+                "cpu": int(device.get("metrics", {}).get("cpuUsage", 0) or 0),
+                "memory": int(device.get("metrics", {}).get("memoryUsed", 0) or 0)
+            }
+            hosts.append(host)
+
+        # Sort by IP
+        hosts.sort(key=lambda x: [int(p) for p in x["ip"].split(".")])
+
+        return {
+            "hosts": hosts,
+            "total_hosts": len(hosts),
+            "online_count": len([h for h in hosts if h["status"] == "online"]),
+            "offline_count": len([h for h in hosts if h["status"] == "offline"]),
+            "warning_count": len([h for h in hosts if h["status"] == "warning"]),
+            "timestamp": datetime.now().isoformat()
+        }
     
     def send_to_api(self, endpoint: str, data: Dict) -> bool:
         """Sendet Daten an die Edge Function"""
@@ -644,20 +758,27 @@ class NetworkScanner:
         infrastructure_data = self.build_infrastructure_data()
         gaming_data = self.build_gaming_devices_data()
         alerts_data = self.build_alerts_data()
-        
+        hosts_data = self.build_hosts_data()
+
         # 4. An API senden
         self.send_to_api("bandwidth", bandwidth_data)
         self.send_to_api("network-infrastructure", infrastructure_data)
         self.send_to_api("gaming-devices", gaming_data)
         self.send_to_api("alerts", {"alerts": alerts_data})
-        
+        self.send_to_api("hosts", hosts_data)
+
         logger.info(f"Scan-Zyklus abgeschlossen: {len(self.devices)} Geräte gefunden")
+        logger.info(f"  → Bandwidth: {bandwidth_data['upstream_gbps']:.2f} Gbps up / {bandwidth_data['downstream_gbps']:.2f} Gbps down")
+        logger.info(f"  → Infrastructure: {infrastructure_data['total_devices']} Geräte")
+        logger.info(f"  → Gaming: {gaming_data['total_gaming_devices']} Geräte")
+        logger.info(f"  → Hosts: {hosts_data['total_hosts']} (online: {hosts_data['online_count']})")
         logger.info("=" * 50)
-        
+
         return {
             "devices_found": len(self.devices),
             "bandwidth": bandwidth_data,
             "infrastructure": infrastructure_data,
+            "hosts": hosts_data,
             "alerts": len(alerts_data)
         }
     

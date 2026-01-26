@@ -24,6 +24,7 @@ export function ApiConnectionStatus({ apiUrl, apiKey }: ApiConnectionStatusProps
     { name: "Network Infrastructure", endpoint: "network-infrastructure", status: "unknown", lastCheck: null },
     { name: "Alerts", endpoint: "alerts", status: "unknown", lastCheck: null },
     { name: "Gaming Devices", endpoint: "gaming-devices", status: "unknown", lastCheck: null },
+    { name: "Hosts", endpoint: "hosts", status: "unknown", lastCheck: null },
     { name: "Dashboard Summary", endpoint: "dashboard-summary", status: "unknown", lastCheck: null },
   ]);
   const [isChecking, setIsChecking] = useState(false);
