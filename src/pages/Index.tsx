@@ -1,4 +1,6 @@
-import { Zap, Wifi, Activity, Network } from "lucide-react";
+import { Zap, Wifi, Activity, Network, Settings2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { MetricCard } from "@/components/dashboard/MetricCard";
 import { BandwidthChart } from "@/components/dashboard/BandwidthChart";
@@ -23,7 +25,15 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-gradient-gaming p-4 md:p-6 lg:p-8">
       <div className="max-w-[1800px] mx-auto">
-        <DashboardHeader isLive={isLive} lastUpdate={lastUpdate} />
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <DashboardHeader isLive={isLive} lastUpdate={lastUpdate} />
+          <Link to="/scanner">
+            <Button variant="outline" size="sm" className="border-primary/50 text-primary hover:bg-primary/10">
+              <Settings2 className="w-4 h-4 mr-2" />
+              Scanner Management
+            </Button>
+          </Link>
+        </div>
 
         {/* Key Metrics Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
