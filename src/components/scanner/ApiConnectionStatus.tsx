@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Cloud, CloudOff, RefreshCw, CheckCircle, XCircle, Clock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,13 +24,14 @@ export function ApiConnectionStatus({ apiUrl, apiKey }: ApiConnectionStatusProps
     { name: "Network Infrastructure", endpoint: "network-infrastructure", status: "unknown", lastCheck: null },
     { name: "Alerts", endpoint: "alerts", status: "unknown", lastCheck: null },
     { name: "Gaming Devices", endpoint: "gaming-devices", status: "unknown", lastCheck: null },
+    { name: "Hosts", endpoint: "hosts", status: "unknown", lastCheck: null },
     { name: "Dashboard Summary", endpoint: "dashboard-summary", status: "unknown", lastCheck: null },
   ]);
   const [isChecking, setIsChecking] = useState(false);
 
-  const checkEndpoint = async (endpoint: EndpointStatus): Promise<EndpointStatus> => {
+  const checkEndpoint = useCallback(async (endpoint: EndpointStatus): Promise<EndpointStatus> => {
     const startTime = Date.now();
-    
+
     try {
       const response = await fetch(`${apiUrl}/${endpoint.endpoint}`, {
         method: "GET",
@@ -48,7 +49,7 @@ export function ApiConnectionStatus({ apiUrl, apiKey }: ApiConnectionStatusProps
         lastCheck: new Date(),
         responseTime,
       };
-    } catch (error) {
+    } catch {
       return {
         ...endpoint,
         status: "error",
@@ -56,25 +57,25 @@ export function ApiConnectionStatus({ apiUrl, apiKey }: ApiConnectionStatusProps
         responseTime: undefined,
       };
     }
-  };
+  }, [apiUrl, apiKey]);
 
-  const checkAllEndpoints = async () => {
+  const checkAllEndpoints = useCallback(async () => {
     setIsChecking(true);
-    
+
     const results = await Promise.all(
       endpoints.map(endpoint => checkEndpoint(endpoint))
     );
-    
+
     setEndpoints(results);
     setIsChecking(false);
-  };
+  }, [endpoints, checkEndpoint]);
 
   useEffect(() => {
     checkAllEndpoints();
     // Recheck every 60 seconds
     const interval = setInterval(checkAllEndpoints, 60000);
     return () => clearInterval(interval);
-  }, [apiUrl, apiKey]);
+  }, [checkAllEndpoints]);
 
   const connectedCount = endpoints.filter(e => e.status === "connected").length;
   const isAllConnected = connectedCount === endpoints.length;

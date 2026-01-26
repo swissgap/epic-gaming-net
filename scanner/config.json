@@ -1,0 +1,24 @@
+{
+  "api_url": "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1",
+  "api_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY2twbGVtd3p6emppa3Z3eGtiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTA1MjMsImV4cCI6MjA4NDg2NjUyM30.aYhxGKgUbfQJV3TghF3JMq0tQ8EUf6N3XsFTQWyAwcg",
+  "snmp_community": "public",
+  "snmp_version": 2,
+  "scan_interval": 30,
+  "timeout": 2,
+  "subnets": [
+    "192.168.1.0/24"
+  ],
+  "gaming_devices": {
+    "switch_cluster": [],
+    "ps5_cluster": []
+  },
+  "device_names": {},
+  "alert_thresholds": {
+    "bandwidth_warning_gbps": 8.0,
+    "bandwidth_critical_gbps": 9.5,
+    "latency_warning_ms": 20,
+    "latency_critical_ms": 50,
+    "packet_loss_warning_percent": 1,
+    "packet_loss_critical_percent": 5
+  }
+}

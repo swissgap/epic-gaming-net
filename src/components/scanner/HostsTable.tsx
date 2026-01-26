@@ -77,7 +77,7 @@ export function HostsTable({ hosts, isLoading }: HostsTableProps) {
     let comparison = 0;
     
     switch (sortKey) {
-      case "ip":
+      case "ip": {
         const ipA = a.ip.split(".").map(Number);
         const ipB = b.ip.split(".").map(Number);
         for (let i = 0; i < 4; i++) {
@@ -87,6 +87,7 @@ export function HostsTable({ hosts, isLoading }: HostsTableProps) {
           }
         }
         break;
+      }
       case "name":
         comparison = a.name.localeCompare(b.name);
         break;

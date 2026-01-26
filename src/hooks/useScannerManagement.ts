@@ -18,6 +18,39 @@ interface ScannerStatus {
   errorCount: number;
 }
 
+interface ApiInfraDevice {
+  id: string;
+  ip?: string;
+  name?: string;
+  type?: string;
+  vendor?: string;
+  status?: string;
+  ping?: number;
+  ports?: number;
+  cpu?: number;
+  memory?: number;
+}
+
+interface ApiGamingDevice {
+  ip: string;
+  name?: string;
+  status?: string;
+  ping?: number;
+}
+
+interface ApiHost {
+  ip: string;
+  name: string;
+  type: string;
+  vendor: string;
+  status: string;
+  lastSeen: string;
+  ping?: number;
+  interfaces?: number;
+  cpu?: number;
+  memory?: number;
+}
+
 const DEFAULT_CONFIG: ScannerConfig = {
   apiUrl: "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1",
   apiKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lY2twbGVtd3p6emppa3Z3eGtiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTA1MjMsImV4cCI6MjA4NDg2NjUyM30.aYhxGKgUbfQJV3TghF3JMq0tQ8EUf6N3XsFTQWyAwcg",
@@ -195,9 +228,46 @@ export function useScannerManagement() {
 
   const fetchHostsFromApi = useCallback(async () => {
     setIsLoading(true);
-    
+
     try {
-      // Try to fetch from gaming-devices and network-infrastructure endpoints
+      // First try the dedicated /hosts endpoint (populated by Python scanner)
+      const hostsRes = await fetch(`${config.apiUrl}/hosts`, {
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": config.apiKey,
+        },
+      });
+
+      if (hostsRes.ok) {
+        const hostsData = await hostsRes.json();
+        if (hostsData?.data?.hosts && hostsData.data.hosts.length > 0) {
+          // Convert API format to ScannedHost format
+          const apiHosts: ScannedHost[] = hostsData.data.hosts.map((host: ApiHost) => ({
+            ip: host.ip,
+            name: host.name,
+            type: host.type as ScannedHost["type"],
+            vendor: host.vendor,
+            status: host.status as ScannedHost["status"],
+            lastSeen: new Date(host.lastSeen),
+            ping: host.ping,
+            interfaces: host.interfaces,
+            cpu: host.cpu,
+            memory: host.memory,
+          }));
+
+          setHosts(apiHosts);
+          setStatus(prev => ({
+            ...prev,
+            devicesFound: apiHosts.length,
+            lastScan: new Date(),
+            errorCount: 0,
+          }));
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Fallback: Try to fetch from gaming-devices and network-infrastructure endpoints
       const [gamingRes, infraRes] = await Promise.all([
         fetch(`${config.apiUrl}/gaming-devices`, {
           headers: {
@@ -220,11 +290,11 @@ export function useScannerManagement() {
 
       // Parse infrastructure devices
       if (infraData?.data?.devices) {
-        infraData.data.devices.forEach((device: any) => {
+        infraData.data.devices.forEach((device: ApiInfraDevice) => {
           apiHosts.push({
             ip: device.ip || device.id,
             name: device.name || device.id,
-            type: device.type?.toLowerCase().replace(" ", "_") || "unknown",
+            type: (device.type?.toLowerCase().replace(" ", "_") || "unknown") as ScannedHost["type"],
             vendor: device.vendor || "Unknown",
             status: device.status === "active" ? "online" : device.status === "warning" ? "warning" : "offline",
             lastSeen: new Date(),
@@ -238,15 +308,15 @@ export function useScannerManagement() {
 
       // Parse gaming devices
       if (gamingData?.data?.devices) {
-        gamingData.data.devices.forEach((device: any) => {
+        gamingData.data.devices.forEach((device: ApiGamingDevice) => {
           if (!apiHosts.find(h => h.ip === device.ip)) {
             apiHosts.push({
               ip: device.ip,
               name: device.name || device.ip,
               type: "unknown",
-              vendor: device.name?.includes("Nintendo") ? "Nintendo" : 
+              vendor: device.name?.includes("Nintendo") ? "Nintendo" :
                       device.name?.includes("PlayStation") ? "Sony" : "Unknown",
-              status: device.status === "optimal" ? "online" : 
+              status: device.status === "optimal" ? "online" :
                       device.status === "warning" ? "warning" : "offline",
               lastSeen: new Date(),
               ping: device.ping,
@@ -274,7 +344,7 @@ export function useScannerManagement() {
         }));
       }
     } catch (error) {
-      console.log("API not available, using demo mode");
+      console.log("API not available, using demo mode:", error);
       const demoHosts = generateDemoHosts();
       setHosts(demoHosts);
       setStatus(prev => ({
@@ -324,7 +394,7 @@ export function useScannerManagement() {
   // Initial load
   useEffect(() => {
     fetchHostsFromApi();
-  }, []);
+  }, [fetchHostsFromApi]);
 
   return {
     config,
