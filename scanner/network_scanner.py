@@ -715,27 +715,33 @@ class NetworkScanner:
                 "Authorization": f"Bearer {self.api_key}" if self.api_key else "",
                 "apikey": self.api_key if self.api_key else ""
             }
-            
+
             response = requests.post(url, json=data, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                logger.debug(f"Daten erfolgreich an {endpoint} gesendet")
+
+            if response.status_code in [200, 201]:
+                logger.debug(f"✓ Daten erfolgreich an {endpoint} gesendet")
                 return True
             else:
                 logger.warning(f"API-Fehler {endpoint}: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Fehler beim Senden an {endpoint}: {e}")
             return False
     
-    def run_scan_cycle(self, subnet: Optional[str] = None):
+    def run_scan_cycle(self, subnets: Optional[List[str]] = None):
         """Führt einen kompletten Scan-Zyklus durch"""
         logger.info("=" * 50)
         logger.info("Starte Scan-Zyklus")
-        
-        # 1. Netzwerk scannen
-        active_hosts = self.scan_network(subnet)
+
+        # 1. Netzwerk scannen (alle konfigurierten Subnets)
+        active_hosts = []
+        if subnets:
+            for subnet in subnets:
+                hosts = self.scan_network(subnet)
+                active_hosts.extend(hosts)
+        else:
+            active_hosts = self.scan_network(None)
         
         # 2. SNMP-Daten sammeln
         with ThreadPoolExecutor(max_workers=10) as executor:
@@ -782,13 +788,13 @@ class NetworkScanner:
             "alerts": len(alerts_data)
         }
     
-    def run_continuous(self, subnet: Optional[str] = None):
+    def run_continuous(self, subnets: Optional[List[str]] = None):
         """Kontinuierlicher Scan-Loop"""
         logger.info(f"Starte kontinuierliches Monitoring (Intervall: {self.scan_interval}s)")
-        
+
         while True:
             try:
-                self.run_scan_cycle(subnet)
+                self.run_scan_cycle(subnets)
                 time.sleep(self.scan_interval)
             except KeyboardInterrupt:
                 logger.info("Monitoring gestoppt")
@@ -836,7 +842,14 @@ def main():
             config.update(file_config)
     
     scanner = NetworkScanner(config)
-    
+
+    # Bestimme zu scannende Subnets (Priorität: CLI > Config > Auto-Detect)
+    subnets_to_scan = None
+    if args.subnet:
+        subnets_to_scan = [args.subnet]
+    elif config.get("subnets"):
+        subnets_to_scan = config["subnets"]
+
     print("""
 ╔══════════════════════════════════════════════════════════════╗
 ║       🎮 Gaming Network Scanner - Command Center             ║
@@ -844,12 +857,15 @@ def main():
 ║  Automatisches SNMP-Monitoring für dein Gaming-Netzwerk      ║
 ╚══════════════════════════════════════════════════════════════╝
     """)
-    
+
+    if subnets_to_scan:
+        logger.info(f"Konfigurierte Subnets: {', '.join(subnets_to_scan)}")
+
     if args.once:
-        result = scanner.run_scan_cycle(args.subnet)
+        result = scanner.run_scan_cycle(subnets_to_scan)
         print(f"\nErgebnis: {json.dumps(result, indent=2)}")
     else:
-        scanner.run_continuous(args.subnet)
+        scanner.run_continuous(subnets_to_scan)
 
 
 if __name__ == "__main__":
