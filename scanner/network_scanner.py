@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gaming Network Scanner - Automatisches Netzwerk-Monitoring für das Command Center
-Scannt das lokale Netzwerk via SNMP und sendet Daten an die Edge Functions.
+Scannt das lokale Netzwerk via SNMP und ntopng, sendet Daten an die Edge Functions.
 """
 
 import os
@@ -106,12 +106,202 @@ VENDOR_OIDS = {
     }
 }
 
+
+# ============================================================================
+# ntopng API Client
+# ============================================================================
+class NtopngClient:
+    """Client für ntopng REST API Integration"""
+
+    def __init__(self, config: Dict[str, Any]):
+        ntop_config = config.get("ntopng", {})
+        self.enabled = ntop_config.get("enabled", False)
+        self.base_url = ntop_config.get("url", "http://192.168.1.50:3000")
+        self.interface_id = ntop_config.get("interface_id", 1)
+        self.username = ntop_config.get("username", "")
+        self.password = ntop_config.get("password", "")
+        self.session = requests.Session()
+        self.last_data: Optional[Dict] = None
+        self.last_fetch_time: float = 0
+
+    def fetch_interface_data(self) -> Optional[Dict]:
+        """Holt Interface-Daten von ntopng REST API"""
+        if not self.enabled:
+            return None
+
+        try:
+            url = f"{self.base_url}/lua/rest/v2/get/interface/data.lua"
+            params = {"ifid": self.interface_id}
+
+            auth = None
+            if self.username and self.password:
+                auth = (self.username, self.password)
+
+            response = self.session.get(url, params=params, auth=auth, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("rc") == 0:
+                    self.last_data = data.get("rsp", {})
+                    self.last_fetch_time = time.time()
+                    logger.debug(f"ntopng Daten abgerufen: {len(self.last_data)} Felder")
+                    return self.last_data
+                else:
+                    logger.warning(f"ntopng API Fehler: {data.get('rc_str', 'Unknown')}")
+            else:
+                logger.warning(f"ntopng HTTP Fehler: {response.status_code}")
+
+        except requests.exceptions.ConnectionError:
+            logger.debug("ntopng nicht erreichbar")
+        except Exception as e:
+            logger.error(f"ntopng Fehler: {e}")
+
+        return self.last_data
+
+    def fetch_hosts(self) -> Optional[List[Dict]]:
+        """Holt Host-Liste von ntopng"""
+        if not self.enabled:
+            return None
+
+        try:
+            url = f"{self.base_url}/lua/rest/v2/get/host/active.lua"
+            params = {"ifid": self.interface_id}
+
+            auth = None
+            if self.username and self.password:
+                auth = (self.username, self.password)
+
+            response = self.session.get(url, params=params, auth=auth, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("rc") == 0:
+                    return data.get("rsp", [])
+
+        except Exception as e:
+            logger.debug(f"ntopng Hosts Fehler: {e}")
+
+        return None
+
+    def get_throughput(self) -> Dict[str, float]:
+        """Extrahiert Throughput-Daten aus ntopng"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {"download_bps": 0, "upload_bps": 0, "download_pps": 0, "upload_pps": 0}
+
+        throughput = self.last_data.get("throughput", {})
+
+        return {
+            "download_bps": throughput.get("download", {}).get("bps", 0),
+            "upload_bps": throughput.get("upload", {}).get("bps", 0),
+            "download_pps": throughput.get("download", {}).get("pps", 0),
+            "upload_pps": throughput.get("upload", {}).get("pps", 0),
+            "total_bps": self.last_data.get("throughput_bps", 0),
+            "total_pps": self.last_data.get("throughput_pps", 0),
+        }
+
+    def get_traffic_stats(self) -> Dict[str, Any]:
+        """Extrahiert Traffic-Statistiken"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {}
+
+        return {
+            "bytes_download": self.last_data.get("bytes_download", 0),
+            "bytes_upload": self.last_data.get("bytes_upload", 0),
+            "total_bytes": self.last_data.get("bytes", 0),
+            "packets_download": self.last_data.get("packets_download", 0),
+            "packets_upload": self.last_data.get("packets_upload", 0),
+            "total_packets": self.last_data.get("packets", 0),
+            "local2remote": self.last_data.get("local2remote", 0),
+            "remote2local": self.last_data.get("remote2local", 0),
+        }
+
+    def get_host_stats(self) -> Dict[str, int]:
+        """Extrahiert Host-Statistiken"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {"num_hosts": 0, "num_local_hosts": 0, "num_devices": 0, "num_flows": 0}
+
+        return {
+            "num_hosts": self.last_data.get("num_hosts", 0),
+            "num_local_hosts": self.last_data.get("num_local_hosts", 0),
+            "num_devices": self.last_data.get("num_devices", 0),
+            "num_flows": self.last_data.get("num_flows", 0),
+            "num_remote_hosts": self.last_data.get("num_hosts", 0) - self.last_data.get("num_local_hosts", 0),
+        }
+
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Extrahiert System-Statistiken vom ntopng-Host"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {}
+
+        sys_stats = self.last_data.get("system_host_stats", {})
+
+        return {
+            "cpu_load": sys_stats.get("cpu_load", 0),
+            "cpu_idle": sys_stats.get("cpu_states", {}).get("idle", 100),
+            "mem_total": sys_stats.get("mem_total", 0),
+            "mem_used": sys_stats.get("mem_used", 0),
+            "mem_free": sys_stats.get("mem_free", 0),
+            "mem_cached": sys_stats.get("mem_cached", 0),
+            "uptime": self.last_data.get("uptime", ""),
+            "uptime_sec": self.last_data.get("uptime_sec", 0),
+            "interface_name": self.last_data.get("ifname", ""),
+            "interface_speed": self.last_data.get("speed", 0),
+        }
+
+    def get_alert_stats(self) -> Dict[str, int]:
+        """Extrahiert Alert-Statistiken"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {}
+
+        return {
+            "engaged_alerts": self.last_data.get("engaged_alerts", 0),
+            "engaged_alerts_error": self.last_data.get("engaged_alerts_error", 0),
+            "engaged_alerts_warning": self.last_data.get("engaged_alerts_warning", 0),
+            "engaged_alerts_notice": self.last_data.get("engaged_alerts_notice", 0),
+            "alerted_flows": self.last_data.get("alerted_flows", 0),
+            "alerted_flows_error": self.last_data.get("alerted_flows_error", 0),
+            "alerted_flows_warning": self.last_data.get("alerted_flows_warning", 0),
+            "dropped_alerts": self.last_data.get("dropped_alerts", 0),
+        }
+
+    def get_tcp_stats(self) -> Dict[str, int]:
+        """Extrahiert TCP-Paket-Statistiken"""
+        if not self.last_data:
+            self.fetch_interface_data()
+
+        if not self.last_data:
+            return {}
+
+        tcp_stats = self.last_data.get("tcpPacketStats", {})
+
+        return {
+            "retransmissions": tcp_stats.get("retransmissions", 0),
+            "out_of_order": tcp_stats.get("out_of_order", 0),
+            "lost": tcp_stats.get("lost", 0),
+        }
+
+
 # ============================================================================
 # Network Scanner Class
 # ============================================================================
 class NetworkScanner:
     """Scannt das Netzwerk und sammelt SNMP-Daten"""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.api_url = config.get("api_url", "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1")
@@ -123,7 +313,10 @@ class NetworkScanner:
         self.devices: Dict[str, Dict] = {}
         self.last_octets: Dict[str, Dict] = {}
         self.last_scan_time: float = 0
-        
+
+        # ntopng Client initialisieren
+        self.ntopng = NtopngClient(config)
+
     def get_local_network(self) -> str:
         """Ermittelt das lokale Netzwerk automatisch"""
         try:
@@ -132,7 +325,7 @@ class NetworkScanner:
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-            
+
             # Subnet aus IP ableiten (Annahme /24)
             parts = local_ip.split(".")
             subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
@@ -141,36 +334,36 @@ class NetworkScanner:
         except Exception as e:
             logger.error(f"Fehler beim Ermitteln des Netzwerks: {e}")
             return "192.168.1.0/24"
-    
+
     def ip_range_from_cidr(self, cidr: str) -> List[str]:
         """Generiert IP-Adressen aus CIDR-Notation"""
         try:
             network, prefix = cidr.split("/")
             prefix = int(prefix)
-            
+
             parts = [int(p) for p in network.split(".")]
             network_int = (parts[0] << 24) + (parts[1] << 16) + (parts[2] << 8) + parts[3]
-            
+
             host_bits = 32 - prefix
             num_hosts = (1 << host_bits) - 2  # Minus Network und Broadcast
-            
+
             ips = []
             for i in range(1, num_hosts + 1):
                 ip_int = network_int + i
                 ip = f"{(ip_int >> 24) & 0xFF}.{(ip_int >> 16) & 0xFF}.{(ip_int >> 8) & 0xFF}.{ip_int & 0xFF}"
                 ips.append(ip)
-            
+
             return ips
         except Exception as e:
             logger.error(f"Fehler beim Parsen von CIDR: {e}")
             return []
-    
+
     def ping_host(self, ip: str) -> bool:
         """Prüft ob ein Host erreichbar ist"""
         try:
             param = "-n" if sys.platform == "win32" else "-c"
             timeout_param = "-w" if sys.platform == "win32" else "-W"
-            
+
             result = subprocess.run(
                 ["ping", param, "1", timeout_param, "1", ip],
                 capture_output=True,
@@ -179,19 +372,19 @@ class NetworkScanner:
             return result.returncode == 0
         except:
             return False
-    
+
     def scan_network(self, subnet: Optional[str] = None) -> List[str]:
         """Scannt das Netzwerk nach aktiven Hosts"""
         if not subnet:
             subnet = self.get_local_network()
-        
+
         logger.info(f"Scanne Netzwerk: {subnet}")
         ips = self.ip_range_from_cidr(subnet)
         active_hosts = []
-        
+
         with ThreadPoolExecutor(max_workers=50) as executor:
             future_to_ip = {executor.submit(self.ping_host, ip): ip for ip in ips}
-            
+
             for future in as_completed(future_to_ip):
                 ip = future_to_ip[future]
                 try:
@@ -200,10 +393,10 @@ class NetworkScanner:
                         logger.debug(f"Host gefunden: {ip}")
                 except Exception:
                     pass
-        
+
         logger.info(f"Gefundene Hosts: {len(active_hosts)}")
         return sorted(active_hosts, key=lambda x: [int(p) for p in x.split(".")])
-    
+
     def snmp_get(self, ip: str, oid: str) -> Optional[Any]:
         """Führt SNMP GET aus"""
         try:
@@ -223,18 +416,18 @@ class NetworkScanner:
                     ContextData(),
                     ObjectType(ObjectIdentity(oid))
                 )
-            
+
             errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-            
+
             if errorIndication or errorStatus:
                 return None
-            
+
             for varBind in varBinds:
                 return varBind[1].prettyPrint()
-                
+
         except Exception:
             return None
-    
+
     def snmp_walk(self, ip: str, oid: str) -> Dict[str, Any]:
         """Führt SNMP WALK aus"""
         results = {}
@@ -257,23 +450,23 @@ class NetworkScanner:
                     ObjectType(ObjectIdentity(oid)),
                     lexicographicMode=False
                 )
-            
+
             for errorIndication, errorStatus, errorIndex, varBinds in iterator:
                 if errorIndication or errorStatus:
                     break
-                
+
                 for varBind in varBinds:
                     oid_str = varBind[0].prettyPrint()
                     value = varBind[1].prettyPrint()
                     # Extrahiere Index aus OID
                     index = oid_str.split(".")[-1]
                     results[index] = value
-                    
+
         except Exception:
             pass
-        
+
         return results
-    
+
     def detect_device_type(self, sys_descr: str, sys_oid: str) -> Dict[str, str]:
         """Erkennt den Gerätetyp anhand von sysDescr und sysObjectID"""
         device_info = {
@@ -282,9 +475,9 @@ class NetworkScanner:
             "model": "",
             "category": "other"
         }
-        
+
         sys_descr_lower = sys_descr.lower() if sys_descr else ""
-        
+
         # Vendor Detection
         if "cisco" in sys_descr_lower or "1.3.6.1.4.1.9" in (sys_oid or ""):
             device_info["vendor"] = "cisco"
@@ -300,7 +493,7 @@ class NetworkScanner:
             device_info["vendor"] = "windows"
         elif "freebsd" in sys_descr_lower or "pfsense" in sys_descr_lower or "opnsense" in sys_descr_lower:
             device_info["vendor"] = "bsd_firewall"
-        
+
         # Device Type Detection
         if any(kw in sys_descr_lower for kw in ["switch", "switching"]):
             device_info["type"] = "switch"
@@ -323,26 +516,26 @@ class NetworkScanner:
         elif "linux" in sys_descr_lower or "windows" in sys_descr_lower:
             device_info["type"] = "server"
             device_info["category"] = "server"
-        
+
         device_info["model"] = sys_descr[:50] if sys_descr else ""
-        
+
         return device_info
-    
+
     def collect_device_data(self, ip: str) -> Optional[Dict]:
         """Sammelt alle SNMP-Daten eines Geräts"""
         logger.debug(f"Sammle Daten von {ip}")
-        
+
         # Basis-Informationen
         sys_descr = self.snmp_get(ip, SNMP_OIDS["system"]["sysDescr"])
         if not sys_descr:
             return None
-        
+
         sys_oid = self.snmp_get(ip, SNMP_OIDS["system"]["sysObjectID"])
         sys_name = self.snmp_get(ip, SNMP_OIDS["system"]["sysName"]) or ip
         sys_uptime = self.snmp_get(ip, SNMP_OIDS["system"]["sysUpTime"])
-        
+
         device_info = self.detect_device_type(sys_descr, sys_oid)
-        
+
         device_data = {
             "ip": ip,
             "name": sys_name,
@@ -357,34 +550,34 @@ class NetworkScanner:
             "interfaces": [],
             "metrics": {}
         }
-        
+
         # Interface-Daten sammeln
         if_descrs = self.snmp_walk(ip, SNMP_OIDS["interfaces"]["ifDescr"])
         if_speeds = self.snmp_walk(ip, SNMP_OIDS["interfaces"]["ifSpeed"])
         if_status = self.snmp_walk(ip, SNMP_OIDS["interfaces"]["ifOperStatus"])
         if_in_octets = self.snmp_walk(ip, SNMP_OIDS["interfaces"]["ifInOctets"])
         if_out_octets = self.snmp_walk(ip, SNMP_OIDS["interfaces"]["ifOutOctets"])
-        
+
         # High-Speed Counter für 10G+ Interfaces
         if_hc_in = self.snmp_walk(ip, SNMP_OIDS["high_speed_interfaces"]["ifHCInOctets"])
         if_hc_out = self.snmp_walk(ip, SNMP_OIDS["high_speed_interfaces"]["ifHCOutOctets"])
         if_high_speed = self.snmp_walk(ip, SNMP_OIDS["high_speed_interfaces"]["ifHighSpeed"])
-        
+
         total_in_bytes = 0
         total_out_bytes = 0
-        
+
         for idx in if_descrs:
             # Bevorzuge HC-Counter wenn verfügbar
             in_octets = int(if_hc_in.get(idx, if_in_octets.get(idx, 0)) or 0)
             out_octets = int(if_hc_out.get(idx, if_out_octets.get(idx, 0)) or 0)
-            
+
             speed = int(if_high_speed.get(idx, 0) or 0) * 1_000_000  # Mbps to bps
             if speed == 0:
                 speed = int(if_speeds.get(idx, 0) or 0)
-            
+
             status_val = if_status.get(idx, "2")
             status = "up" if status_val == "1" else "down"
-            
+
             interface = {
                 "index": idx,
                 "name": if_descrs[idx],
@@ -394,11 +587,11 @@ class NetworkScanner:
                 "out_octets": out_octets
             }
             device_data["interfaces"].append(interface)
-            
+
             if status == "up":
                 total_in_bytes += in_octets
                 total_out_bytes += out_octets
-        
+
         # Bandwidth-Berechnung (Delta seit letztem Scan)
         current_time = time.time()
         if ip in self.last_octets and self.last_scan_time > 0:
@@ -406,20 +599,20 @@ class NetworkScanner:
             if time_delta > 0:
                 last_in = self.last_octets[ip].get("in", 0)
                 last_out = self.last_octets[ip].get("out", 0)
-                
+
                 # Bits per second
                 in_bps = ((total_in_bytes - last_in) * 8) / time_delta
                 out_bps = ((total_out_bytes - last_out) * 8) / time_delta
-                
+
                 device_data["metrics"]["bandwidth"] = {
                     "in_bps": max(0, in_bps),
                     "out_bps": max(0, out_bps),
                     "in_mbps": max(0, in_bps / 1_000_000),
                     "out_mbps": max(0, out_bps / 1_000_000)
                 }
-        
+
         self.last_octets[ip] = {"in": total_in_bytes, "out": total_out_bytes}
-        
+
         # Vendor-spezifische Metriken
         if device_info["vendor"] in VENDOR_OIDS:
             vendor_oids = VENDOR_OIDS[device_info["vendor"]]
@@ -427,23 +620,23 @@ class NetworkScanner:
                 value = self.snmp_get(ip, oid)
                 if value:
                     device_data["metrics"][metric_name] = value
-        
+
         return device_data
-    
+
     def measure_latency(self, ip: str, count: int = 5) -> Dict[str, float]:
         """Misst Latenz zu einem Host"""
         try:
             param = "-n" if sys.platform == "win32" else "-c"
-            
+
             result = subprocess.run(
                 ["ping", param, str(count), ip],
                 capture_output=True,
                 text=True,
                 timeout=10
             )
-            
+
             output = result.stdout
-            
+
             # Parse Ping-Ausgabe
             if sys.platform == "win32":
                 # Windows: Average = 10ms
@@ -463,19 +656,59 @@ class NetworkScanner:
                         "max": float(match.group(3)),
                         "loss": 0
                     }
-                
+
                 # Packet loss
                 loss_match = re.search(r"(\d+)% packet loss", output)
                 if loss_match:
                     return {"avg": 0, "min": 0, "max": 0, "loss": float(loss_match.group(1))}
-            
+
         except Exception as e:
             logger.debug(f"Latenz-Messung fehlgeschlagen für {ip}: {e}")
-        
+
         return {"avg": 0, "min": 0, "max": 0, "loss": 100}
-    
+
     def aggregate_bandwidth_data(self) -> Dict:
         """Aggregiert Bandwidth-Daten für das Dashboard (API-kompatibles Format)"""
+
+        # Zuerst ntopng-Daten versuchen
+        if self.ntopng.enabled:
+            ntopng_data = self.ntopng.fetch_interface_data()
+            if ntopng_data:
+                throughput = self.ntopng.get_throughput()
+                traffic = self.ntopng.get_traffic_stats()
+                host_stats = self.ntopng.get_host_stats()
+                tcp_stats = self.ntopng.get_tcp_stats()
+
+                # Konvertiere bps zu Gbps
+                downstream_gbps = throughput.get("download_bps", 0) / 1_000_000_000
+                upstream_gbps = throughput.get("upload_bps", 0) / 1_000_000_000
+
+                return {
+                    "upstream_gbps": round(upstream_gbps, 4),
+                    "downstream_gbps": round(downstream_gbps, 4),
+                    "wifi_gbps": round(downstream_gbps * 0.4, 4),  # Schätzung
+                    "upstream_percent": round((upstream_gbps / 10.0) * 100, 2),
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "ntopng",
+                    "ntopng": {
+                        "throughput_bps": throughput.get("total_bps", 0),
+                        "throughput_pps": throughput.get("total_pps", 0),
+                        "download_pps": throughput.get("download_pps", 0),
+                        "upload_pps": throughput.get("upload_pps", 0),
+                        "bytes_total": traffic.get("total_bytes", 0),
+                        "bytes_download": traffic.get("bytes_download", 0),
+                        "bytes_upload": traffic.get("bytes_upload", 0),
+                        "packets_total": traffic.get("total_packets", 0),
+                        "num_hosts": host_stats.get("num_hosts", 0),
+                        "num_local_hosts": host_stats.get("num_local_hosts", 0),
+                        "num_flows": host_stats.get("num_flows", 0),
+                        "tcp_retransmissions": tcp_stats.get("retransmissions", 0),
+                        "tcp_out_of_order": tcp_stats.get("out_of_order", 0),
+                        "tcp_lost": tcp_stats.get("lost", 0),
+                    }
+                }
+
+        # Fallback: SNMP-basierte Aggregation
         total_downstream = 0
         total_upstream = 0
         total_wifi = 0
@@ -499,9 +732,10 @@ class NetworkScanner:
             "downstream_gbps": round(downstream_gbps, 2),
             "wifi_gbps": round(wifi_gbps, 2),
             "upstream_percent": round((upstream_gbps / 10.0) * 100, 1),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "source": "snmp"
         }
-    
+
     def build_infrastructure_data(self) -> Dict:
         """Baut Infrastruktur-Daten für das Dashboard (API-kompatibles Format)"""
         devices = []
@@ -550,7 +784,7 @@ class NetworkScanner:
             "devices": devices,
             "total_devices": len(devices)
         }
-    
+
     def build_gaming_devices_data(self) -> Dict:
         """Baut Gaming-Device-Daten (Latenz-Messungen) - API-kompatibles Format"""
         devices = []
@@ -614,10 +848,38 @@ class NetworkScanner:
             "devices": devices,
             "total_gaming_devices": len(devices)
         }
-    
+
     def build_alerts_data(self) -> List[Dict]:
         """Generiert Alerts basierend auf Gerätestatus (API-kompatibles Format)"""
         alerts = []
+
+        # ntopng Alerts einbeziehen
+        if self.ntopng.enabled and self.ntopng.last_data:
+            alert_stats = self.ntopng.get_alert_stats()
+            if alert_stats.get("engaged_alerts_error", 0) > 0:
+                alerts.append({
+                    "device": "ntopng",
+                    "level": "critical",
+                    "msg": f"{alert_stats['engaged_alerts_error']} kritische Alerts aktiv",
+                    "time": "Jetzt"
+                })
+            if alert_stats.get("engaged_alerts_warning", 0) > 0:
+                alerts.append({
+                    "device": "ntopng",
+                    "level": "warning",
+                    "msg": f"{alert_stats['engaged_alerts_warning']} Warnungen aktiv",
+                    "time": "Jetzt"
+                })
+
+            # TCP-Probleme
+            tcp_stats = self.ntopng.get_tcp_stats()
+            if tcp_stats.get("retransmissions", 0) > 1000:
+                alerts.append({
+                    "device": "Netzwerk",
+                    "level": "warning",
+                    "msg": f"Hohe TCP Retransmissions: {tcp_stats['retransmissions']}",
+                    "time": "Jetzt"
+                })
 
         for ip, device in self.devices.items():
             # High Bandwidth Alert
@@ -656,7 +918,44 @@ class NetworkScanner:
         """Baut Host-Daten für das Scanner Management"""
         hosts = []
 
+        # ntopng Hosts einbeziehen wenn verfügbar
+        if self.ntopng.enabled:
+            ntopng_hosts = self.ntopng.fetch_hosts()
+            if ntopng_hosts:
+                for h in ntopng_hosts:
+                    if isinstance(h, dict):
+                        ip = h.get("ip", h.get("host", ""))
+                        if ip and ip not in [d.get("ip") for d in hosts]:
+                            hosts.append({
+                                "ip": ip,
+                                "name": h.get("name", h.get("symbolic_name", ip)),
+                                "type": "unknown",
+                                "vendor": h.get("os", "Unknown"),
+                                "status": "online",
+                                "lastSeen": datetime.now().isoformat(),
+                                "ping": None,
+                                "interfaces": 0,
+                                "cpu": 0,
+                                "memory": 0,
+                                "source": "ntopng",
+                                "bytes_sent": h.get("bytes_sent", 0),
+                                "bytes_rcvd": h.get("bytes_rcvd", 0),
+                            })
+
+        # SNMP-gescannte Hosts
         for ip, device in self.devices.items():
+            # Überspringe wenn bereits von ntopng hinzugefügt
+            if any(h.get("ip") == ip for h in hosts):
+                # Aktualisiere mit SNMP-Daten
+                for h in hosts:
+                    if h.get("ip") == ip:
+                        h["type"] = device.get("type", "unknown")
+                        h["vendor"] = device.get("vendor", h.get("vendor", "Unknown"))
+                        h["interfaces"] = len(device.get("interfaces", []))
+                        h["source"] = "ntopng+snmp"
+                        break
+                continue
+
             latency = self.measure_latency(ip, 1)
 
             # Map device type to API format
@@ -690,12 +989,18 @@ class NetworkScanner:
                 "ping": round(latency["avg"], 1) if latency["avg"] > 0 else None,
                 "interfaces": len(device.get("interfaces", [])),
                 "cpu": int(device.get("metrics", {}).get("cpuUsage", 0) or 0),
-                "memory": int(device.get("metrics", {}).get("memoryUsed", 0) or 0)
+                "memory": int(device.get("metrics", {}).get("memoryUsed", 0) or 0),
+                "source": "snmp"
             }
             hosts.append(host)
 
         # Sort by IP
-        hosts.sort(key=lambda x: [int(p) for p in x["ip"].split(".")])
+        hosts.sort(key=lambda x: [int(p) for p in x.get("ip", "0.0.0.0").split(".") if p.isdigit()] or [0, 0, 0, 0])
+
+        # ntopng Host-Statistiken hinzufügen
+        ntopng_stats = {}
+        if self.ntopng.enabled and self.ntopng.last_data:
+            ntopng_stats = self.ntopng.get_host_stats()
 
         return {
             "hosts": hosts,
@@ -703,9 +1008,10 @@ class NetworkScanner:
             "online_count": len([h for h in hosts if h["status"] == "online"]),
             "offline_count": len([h for h in hosts if h["status"] == "offline"]),
             "warning_count": len([h for h in hosts if h["status"] == "warning"]),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "ntopng_stats": ntopng_stats if ntopng_stats else None
         }
-    
+
     def send_to_api(self, endpoint: str, data: Dict) -> bool:
         """Sendet Daten an die Edge Function"""
         try:
@@ -715,32 +1021,40 @@ class NetworkScanner:
                 "Authorization": f"Bearer {self.api_key}" if self.api_key else "",
                 "apikey": self.api_key if self.api_key else ""
             }
-            
+
             response = requests.post(url, json=data, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
+
+            if response.status_code in [200, 201]:
                 logger.debug(f"Daten erfolgreich an {endpoint} gesendet")
                 return True
             else:
                 logger.warning(f"API-Fehler {endpoint}: {response.status_code} - {response.text}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Fehler beim Senden an {endpoint}: {e}")
             return False
-    
+
     def run_scan_cycle(self, subnet: Optional[str] = None):
         """Führt einen kompletten Scan-Zyklus durch"""
         logger.info("=" * 50)
         logger.info("Starte Scan-Zyklus")
-        
+
+        # 0. ntopng Daten abrufen (schnell, parallel zum Scan)
+        if self.ntopng.enabled:
+            logger.info("Rufe ntopng-Daten ab...")
+            self.ntopng.fetch_interface_data()
+            if self.ntopng.last_data:
+                host_stats = self.ntopng.get_host_stats()
+                logger.info(f"  → ntopng: {host_stats.get('num_hosts', 0)} Hosts, {host_stats.get('num_flows', 0)} Flows")
+
         # 1. Netzwerk scannen
         active_hosts = self.scan_network(subnet)
-        
+
         # 2. SNMP-Daten sammeln
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_ip = {executor.submit(self.collect_device_data, ip): ip for ip in active_hosts}
-            
+
             for future in as_completed(future_to_ip):
                 ip = future_to_ip[future]
                 try:
@@ -750,9 +1064,9 @@ class NetworkScanner:
                         logger.info(f"✓ {ip}: {device_data['name']} ({device_data['type']})")
                 except Exception as e:
                     logger.debug(f"Fehler bei {ip}: {e}")
-        
+
         self.last_scan_time = time.time()
-        
+
         # 3. Daten aggregieren und senden
         bandwidth_data = self.aggregate_bandwidth_data()
         infrastructure_data = self.build_infrastructure_data()
@@ -768,7 +1082,8 @@ class NetworkScanner:
         self.send_to_api("hosts", hosts_data)
 
         logger.info(f"Scan-Zyklus abgeschlossen: {len(self.devices)} Geräte gefunden")
-        logger.info(f"  → Bandwidth: {bandwidth_data['upstream_gbps']:.2f} Gbps up / {bandwidth_data['downstream_gbps']:.2f} Gbps down")
+        logger.info(f"  → Quelle: {bandwidth_data.get('source', 'unknown')}")
+        logger.info(f"  → Bandwidth: {bandwidth_data['upstream_gbps']:.4f} Gbps up / {bandwidth_data['downstream_gbps']:.4f} Gbps down")
         logger.info(f"  → Infrastructure: {infrastructure_data['total_devices']} Geräte")
         logger.info(f"  → Gaming: {gaming_data['total_gaming_devices']} Geräte")
         logger.info(f"  → Hosts: {hosts_data['total_hosts']} (online: {hosts_data['online_count']})")
@@ -779,13 +1094,16 @@ class NetworkScanner:
             "bandwidth": bandwidth_data,
             "infrastructure": infrastructure_data,
             "hosts": hosts_data,
-            "alerts": len(alerts_data)
+            "alerts": len(alerts_data),
+            "source": bandwidth_data.get("source", "snmp")
         }
-    
+
     def run_continuous(self, subnet: Optional[str] = None):
         """Kontinuierlicher Scan-Loop"""
         logger.info(f"Starte kontinuierliches Monitoring (Intervall: {self.scan_interval}s)")
-        
+        if self.ntopng.enabled:
+            logger.info(f"  → ntopng Integration aktiviert: {self.ntopng.base_url}")
+
         while True:
             try:
                 self.run_scan_cycle(subnet)
@@ -810,13 +1128,15 @@ def main():
     parser.add_argument("--api-url", help="API Base URL")
     parser.add_argument("--api-key", help="API Key für Authentifizierung")
     parser.add_argument("--config", help="Pfad zur Konfigurationsdatei")
+    parser.add_argument("--ntopng-url", help="ntopng URL (z.B. http://192.168.1.50:3000)")
+    parser.add_argument("--ntopng-ifid", type=int, default=1, help="ntopng Interface ID")
     parser.add_argument("--verbose", "-v", action="store_true", help="Ausführliche Ausgabe")
-    
+
     args = parser.parse_args()
-    
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     # Konfiguration laden
     config = {
         "api_url": args.api_url or os.environ.get("SCANNER_API_URL", "https://oeckplemwzzzjikvwxkb.supabase.co/functions/v1"),
@@ -826,25 +1146,35 @@ def main():
         "gaming_devices": {
             "switch_cluster": [],  # IPs der Nintendo Switches
             "ps5_cluster": []      # IPs der PS5s
+        },
+        "ntopng": {
+            "enabled": bool(args.ntopng_url or os.environ.get("NTOPNG_URL")),
+            "url": args.ntopng_url or os.environ.get("NTOPNG_URL", "http://192.168.1.50:3000"),
+            "interface_id": args.ntopng_ifid or int(os.environ.get("NTOPNG_IFID", "1")),
+            "username": os.environ.get("NTOPNG_USER", ""),
+            "password": os.environ.get("NTOPNG_PASS", ""),
         }
     }
-    
+
     # Config-Datei laden wenn vorhanden
     if args.config and os.path.exists(args.config):
         with open(args.config) as f:
             file_config = json.load(f)
             config.update(file_config)
-    
+
     scanner = NetworkScanner(config)
-    
+
     print("""
 ╔══════════════════════════════════════════════════════════════╗
 ║       🎮 Gaming Network Scanner - Command Center             ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Automatisches SNMP-Monitoring für dein Gaming-Netzwerk      ║
+║  Automatisches SNMP + ntopng Monitoring für dein Netzwerk    ║
 ╚══════════════════════════════════════════════════════════════╝
     """)
-    
+
+    if scanner.ntopng.enabled:
+        print(f"  📊 ntopng Integration: {scanner.ntopng.base_url} (ifid={scanner.ntopng.interface_id})")
+
     if args.once:
         result = scanner.run_scan_cycle(args.subnet)
         print(f"\nErgebnis: {json.dumps(result, indent=2)}")
