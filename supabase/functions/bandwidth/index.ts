@@ -3,6 +3,23 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+interface NtopngData {
+  throughput_bps?: number;
+  throughput_pps?: number;
+  download_pps?: number;
+  upload_pps?: number;
+  bytes_total?: number;
+  bytes_download?: number;
+  bytes_upload?: number;
+  packets_total?: number;
+  num_hosts?: number;
+  num_local_hosts?: number;
+  num_flows?: number;
+  tcp_retransmissions?: number;
+  tcp_out_of_order?: number;
+  tcp_lost?: number;
+}
+
 interface BandwidthData {
   id: string;
   timestamp: string;
@@ -11,6 +28,8 @@ interface BandwidthData {
   wifi_gbps: number;
   upstream_percent: number;
   interfaces?: Record<string, unknown>;
+  source?: string;
+  ntopng?: NtopngData;
 }
 
 // In-memory storage (for production, use database)
@@ -31,12 +50,17 @@ Deno.serve(async (req: Request) => {
       const limit = parseInt(url.searchParams.get("limit") || "20");
       const data = bandwidthStore.slice(-limit);
       
+      // Get latest ntopng data if available
+      const latestWithNtopng = data.find(d => d.ntopng);
+      
       return new Response(
         JSON.stringify({
           success: true,
           data,
           count: data.length,
           lastUpdate: data[data.length - 1]?.timestamp || null,
+          source: data[data.length - 1]?.source || "unknown",
+          ntopng: latestWithNtopng?.ntopng || null,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -64,6 +88,8 @@ Deno.serve(async (req: Request) => {
         wifi_gbps: body.wifi_gbps || body.wifi || 0,
         upstream_percent: body.upstream_percent || ((body.upstream_gbps || body.upstream || 0) / 10) * 100,
         interfaces: body.interfaces,
+        source: body.source || "scanner",
+        ntopng: body.ntopng,
       };
 
       bandwidthStore.push(record);
@@ -73,9 +99,12 @@ Deno.serve(async (req: Request) => {
         bandwidthStore.shift();
       }
 
-      console.log("✓ Bandwidth data received:", {
-        upstream: record.upstream_gbps.toFixed(1),
+      const sourceInfo = record.source === "ntopng" ? "ntopng" : "SNMP";
+      console.log(`✓ Bandwidth data received (${sourceInfo}):`, {
+        upstream: record.upstream_gbps.toFixed(4),
+        downstream: record.downstream_gbps.toFixed(4),
         timestamp: record.timestamp,
+        ntopng_hosts: record.ntopng?.num_hosts,
       });
 
       return new Response(

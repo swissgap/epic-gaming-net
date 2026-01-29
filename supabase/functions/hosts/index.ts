@@ -14,6 +14,17 @@ interface ScannedHost {
   interfaces?: number;
   cpu?: number;
   memory?: number;
+  source?: string;
+  bytes_sent?: number;
+  bytes_rcvd?: number;
+}
+
+interface NtopngHostStats {
+  num_hosts?: number;
+  num_local_hosts?: number;
+  num_devices?: number;
+  num_flows?: number;
+  num_remote_hosts?: number;
 }
 
 interface HostsData {
@@ -23,6 +34,7 @@ interface HostsData {
   online_count: number;
   offline_count: number;
   warning_count: number;
+  ntopng_stats?: NtopngHostStats;
 }
 
 // In-memory storage
@@ -40,6 +52,7 @@ Deno.serve(async (req: Request) => {
       // Filter options
       const statusFilter = url.searchParams.get("status");
       const typeFilter = url.searchParams.get("type");
+      const sourceFilter = url.searchParams.get("source");
       const search = url.searchParams.get("search")?.toLowerCase();
 
       let hosts = hostsData?.hosts || [];
@@ -50,6 +63,9 @@ Deno.serve(async (req: Request) => {
       }
       if (typeFilter) {
         hosts = hosts.filter((h) => h.type === typeFilter);
+      }
+      if (sourceFilter) {
+        hosts = hosts.filter((h) => h.source === sourceFilter || h.source?.includes(sourceFilter));
       }
       if (search) {
         hosts = hosts.filter(
@@ -69,6 +85,7 @@ Deno.serve(async (req: Request) => {
             online_count: hostsData?.online_count || 0,
             offline_count: hostsData?.offline_count || 0,
             warning_count: hostsData?.warning_count || 0,
+            ntopng_stats: hostsData?.ntopng_stats || null,
           },
           lastUpdate: hostsData?.timestamp || null,
         }),
@@ -96,13 +113,21 @@ Deno.serve(async (req: Request) => {
         online_count: body.online_count || body.hosts?.filter((h: ScannedHost) => h.status === "online").length || 0,
         offline_count: body.offline_count || body.hosts?.filter((h: ScannedHost) => h.status === "offline").length || 0,
         warning_count: body.warning_count || body.hosts?.filter((h: ScannedHost) => h.status === "warning").length || 0,
+        ntopng_stats: body.ntopng_stats || null,
       };
+
+      // Count sources
+      const ntopngHosts = hostsData.hosts.filter(h => h.source?.includes("ntopng")).length;
+      const snmpHosts = hostsData.hosts.filter(h => h.source?.includes("snmp")).length;
 
       console.log("Hosts scan received:", {
         totalHosts: hostsData.total_hosts,
         online: hostsData.online_count,
         offline: hostsData.offline_count,
         warning: hostsData.warning_count,
+        fromNtopng: ntopngHosts,
+        fromSnmp: snmpHosts,
+        ntopngFlows: hostsData.ntopng_stats?.num_flows,
       });
 
       return new Response(

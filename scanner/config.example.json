@@ -9,6 +9,14 @@
     "192.168.1.0/24",
     "192.168.10.0/24"
   ],
+  "ntopng": {
+    "enabled": true,
+    "url": "http://192.168.1.50:3000",
+    "interface_id": 1,
+    "username": "",
+    "password": "",
+    "poll_interval": 5
+  },
   "gaming_devices": {
     "switch_cluster": [
       "192.168.1.50",
